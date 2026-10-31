@@ -584,7 +584,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "sonora-session"
+name = "sonora-sessions"
 version = "0.1.0"
 dependencies = [
  "anyhow",

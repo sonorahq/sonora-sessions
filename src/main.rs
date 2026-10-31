@@ -40,7 +40,7 @@ async fn main() -> Result<()> {
 
     tracing_subscriber::fmt()
         .with_env_filter(
-            EnvFilter::try_from_default_env().unwrap_or_else(|_| "sonora_session=info".into()),
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| "sonora_sessions=info".into()),
         )
         .init();
 
@@ -55,7 +55,7 @@ async fn main() -> Result<()> {
     });
 
     let app = Router::new()
-        .route("/", get(|| async { "sonora-session" }))
+        .route("/", get(|| async { "sonora-sessions" }))
         .route("/health", get(|| async { "ok" }))
         .route("/ws", get(upgrade))
         .with_state(hub);

@@ -1,39 +1,36 @@
-# sonora-session
+# sonora-sessions
 
-The server behind Sonora Sessions. One listener starts a session and gets a six-digit code,
-friends type the code into Sonora, and from then on whatever anyone in the session plays, pauses
-or seeks to plays the same way for everyone.
+The server behind Sonora Sessions.
 
-Every member has to be signed in to the provider the session was started on. The server only
-passes the provider's track models between clients. Local files are never shared.
-
-## Running
+## Run
 
 ```sh
-cargo run                    # listens on :8080
-PORT=8787 cargo run          # another port
-docker build -t sonora-session .
-docker run -p 8080:8080 sonora-session
+docker build -t sonora-sessions .
+docker run -d -p 8080:8080 --name sonora-sessions sonora-sessions
 ```
 
-`GET /health` answers `ok`. Clients connect a WebSocket to `/ws`. Logging follows `RUST_LOG`
-and defaults to `sonora_session=info`.
+Or without Docker: `cargo run --release`.
 
-## Protocol
+| Variable   | Default                | Meaning            |
+| ---------- | ---------------------- | ------------------ |
+| `PORT`     | `8080`                 | Port to listen on  |
+| `RUST_LOG` | `sonora_sessions=info` | Log level          |
 
-One JSON object per text frame, its kind in `type`. The types live in `src/protocol.rs`, and
-Sonora keeps a copy of them in `crates/state/src/listening/wire.rs`, so a new field has to be
-optional until every client knows it.
+Put it behind a reverse proxy with TLS and WebSocket upgrades allowed.
 
-A client sends `create` or `join` first, then `state` whenever its playback changes and `ping`
-every few seconds to keep the connection and to measure the server's clock. The server answers
-with `joined`, then `members`, `state`, `pong`, `ended` and `error` as things happen. Every
-member hears each state, its own included, in the order the server took them, so a client that
-has a state of its own on the way ignores older ones from others and everyone settles on the
-last. A state's `at` is the server's clock when it arrived, so a client works out where the
-track is now from it.
+## Endpoints
 
-A session outlives its last member by two minutes so a dropped client can come back with the
-same code. The host leaving on purpose ends it for everyone, and a host whose connection drops
-hands over to whoever joined next. An address that gets twenty codes wrong in ten minutes is
-turned away until the window passes.
+| Path          | Answer                                          |
+| ------------- | ----------------------------------------------- |
+| `GET /`       | `sonora-sessions`                               |
+| `GET /health` | `ok` while the server is up                     |
+| `GET /ws`     | The WebSocket Sonora connects to                |
+
+`sonora-sessions health` exits with 0 while the local server answers `/health`. The Docker image
+uses it as its health check.
+
+## Use it in Sonora
+
+Settings → Playback → Sessions: turn off **Use the official Sonora Sessions server**, type the
+server's address, such as `wss://sessions.example.com`, and press **Save**. Sonora keeps it only
+once `/health` answers.
