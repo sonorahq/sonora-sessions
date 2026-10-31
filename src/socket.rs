@@ -114,6 +114,10 @@ pub async fn serve(socket: WebSocket, hub: Arc<Hub>, from: IpAddr) {
                     hub.leave(&old, true);
                 }
             }
+            Request::Kick { member } => match &place {
+                Some(place) => hub.kick(place, &member),
+                None => refuse(&outbox, Reason::Invalid, None),
+            },
             Request::Ping { t } => hub::send(&outbox, &Reply::Pong { t, now: hub::now() }),
         }
     }

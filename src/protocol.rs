@@ -41,6 +41,8 @@ pub enum Request {
     },
     /// Leaves the session. The host leaving ends it for everyone.
     Leave,
+    /// Removes the member `member` from the session. Only the host may.
+    Kick { member: String },
     /// Asks for the server's clock, so the client can tell how far behind a state it hears is.
     Ping { t: u64 },
 }
@@ -71,6 +73,8 @@ pub enum Reply {
     Pong { t: u64, now: u64 },
     /// The host ended the session.
     Ended,
+    /// The host removed the receiver from the session.
+    Kicked,
     /// What the server could not do.
     Error {
         reason: Reason,

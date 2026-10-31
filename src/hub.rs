@@ -226,6 +226,33 @@ impl Hub {
         session.announce_members(None);
     }
 
+    /// Takes `member` out of the session when the member at `place` hosts it, and tells them so.
+    /// A request from anyone else, or about the host itself, changes nothing.
+    pub fn kick(&self, place: &Place, member: &str) {
+        let mut inner = self.lock();
+        let Some(session) = inner.sessions.get_mut(&place.code) else {
+            return;
+        };
+        let hosting = session
+            .members
+            .iter()
+            .any(|seat| seat.id == place.member && seat.host);
+        if !hosting || member == place.member {
+            return;
+        }
+        let Some(at) = session.members.iter().position(|seat| seat.id == member) else {
+            return;
+        };
+        let seat = session.members.remove(at);
+        send(&seat.outbox, &Reply::Kicked);
+        session.announce_members(None);
+        tracing::info!(
+            members = session.members.len(),
+            "session {} lost a member to its host",
+            place.code
+        );
+    }
+
     /// Forgets sessions nobody came back to and misses old enough not to count.
     pub fn sweep(&self) {
         let mut inner = self.lock();
