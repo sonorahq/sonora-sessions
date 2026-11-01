@@ -3,10 +3,11 @@
 
 mod hub;
 mod protocol;
+mod proxy;
 mod socket;
 
 use std::io::{Read as _, Write as _};
-use std::net::{IpAddr, SocketAddr, TcpStream};
+use std::net::{SocketAddr, TcpStream};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -20,6 +21,13 @@ use tokio::net::TcpListener;
 use tracing_subscriber::EnvFilter;
 
 use crate::hub::{Hub, Turned};
+use crate::proxy::Trusted;
+
+/// What every request handler shares.
+struct Server {
+    hub: Arc<Hub>,
+    trusted: Trusted,
+}
 
 /// The port the server listens on when `PORT` names none.
 const PORT: u16 = 8080;
@@ -86,7 +94,10 @@ async fn main() -> Result<()> {
         .route("/", get(|| async { "sonora-sessions" }))
         .route("/health", get(|| async { "ok" }))
         .route("/ws", get(upgrade))
-        .with_state(hub);
+        .with_state(Arc::new(Server {
+            hub,
+            trusted: Trusted::from_env().context("cannot read TRUSTED_PROXIES")?,
+        }));
     let listener = TcpListener::bind(("0.0.0.0", port))
         .await
         .with_context(|| format!("cannot listen on port {port}"))?;
@@ -102,11 +113,12 @@ async fn main() -> Result<()> {
 
 async fn upgrade(
     upgrade: WebSocketUpgrade,
-    State(hub): State<Arc<Hub>>,
+    State(server): State<Arc<Server>>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
 ) -> Response {
-    let from = client_ip(&headers).unwrap_or(peer.ip());
+    let from = server.trusted.client(&headers, peer.ip());
+    let hub = server.hub.clone();
     // one address holding too many sockets is turned away before it gets another
     let admission = match hub.admit(from) {
         Ok(admission) => admission,
@@ -126,22 +138,6 @@ async fn upgrade(
         .on_upgrade(move |socket| async move {
             socket::serve(socket, hub, from).await;
             drop(admission);
-        })
-}
-
-/// The address a request came from when a proxy stands in front: Cloudflare's header first, then
-/// the address the last proxy saw.
-fn client_ip(headers: &HeaderMap) -> Option<IpAddr> {
-    let header = |name: &str| headers.get(name).and_then(|value| value.to_str().ok());
-    header("cf-connecting-ip")
-        .and_then(|ip| ip.trim().parse().ok())
-        .or_else(|| {
-            header("x-forwarded-for")?
-                .rsplit(',')
-                .next()?
-                .trim()
-                .parse()
-                .ok()
         })
 }
 

@@ -16,6 +16,7 @@ Or without Docker: `cargo run --release`.
 | `PORT`            | `8080`                 | Port to listen on                                        |
 | `RUST_LOG`        | `sonora_sessions=info` | Log level                                                |
 | `MAX_CONNECTIONS` | `100000` in the image  | People connected at once, about 9 KiB each while idle   |
+| `TRUSTED_PROXIES` | Cloudflare's ranges   | Comma-separated proxy ranges whose `CF-Connecting-IP` is believed |
 
 Put it behind a reverse proxy with TLS and WebSocket upgrades allowed.
 
