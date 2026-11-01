@@ -97,6 +97,8 @@ pub enum Reason {
     RateLimited,
     /// The server holds as many sessions as it takes.
     Busy,
+    /// The sender's address already started as many live sessions as one may.
+    TooMany,
     /// The client speaks another protocol version.
     Version,
     /// The request made no sense in this state, as a state sent outside a session.

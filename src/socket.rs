@@ -73,7 +73,13 @@ pub async fn serve(socket: WebSocket, hub: Arc<Hub>, from: IpAddr) {
                     refuse(&outbox, Reason::Invalid, None);
                     continue;
                 };
-                match hub.create(display(name), picture(image), provider, outbox.clone()) {
+                match hub.create(
+                    display(name),
+                    picture(image),
+                    provider,
+                    from,
+                    outbox.clone(),
+                ) {
                     Ok(joined) => place = Some(joined),
                     Err(reason) => refuse(&outbox, reason, None),
                 }

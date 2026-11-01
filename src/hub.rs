@@ -28,6 +28,11 @@ const LINGER: Duration = Duration::from_secs(120);
 /// How many codes one address may get wrong within `MISS_WINDOW` before it is turned away.
 const MISSES: u32 = 20;
 const MISS_WINDOW: Duration = Duration::from_secs(600);
+/// How many live sessions one address may have started. An address is a whole IPv6 `/64`, which
+/// one household or one attacker holds all of.
+const HOSTED: usize = 3;
+/// How many connections one address may hold open at once.
+const CONNECTIONS: usize = 32;
 /// What Sonora puts before the id of a file on the listener's own disk. Such a track means
 /// nothing to anyone else, so it is never shared.
 const LOCAL_PREFIX: &str = "local:";
@@ -45,6 +50,8 @@ struct Inner {
     next: u64,
     /// Wrong codes per address, for rate limiting.
     misses: HashMap<IpAddr, Misses>,
+    /// Open connections per address.
+    connections: HashMap<IpAddr, usize>,
 }
 
 struct Misses {
@@ -59,6 +66,8 @@ struct Session {
     state: Option<Playback>,
     /// When the last member left, while nobody is in the session.
     emptied: Option<Instant>,
+    /// The address that started the session, which counts against its `HOSTED`.
+    origin: IpAddr,
 }
 
 struct Seat {
@@ -86,11 +95,21 @@ impl Hub {
         name: String,
         image: Option<String>,
         provider: String,
+        from: IpAddr,
         outbox: Outbox,
     ) -> Result<Place, Reason> {
+        let origin = address(from);
         let mut inner = self.lock();
         if inner.sessions.len() >= MAX_SESSIONS {
             return Err(Reason::Busy);
+        }
+        let hosted = inner
+            .sessions
+            .values()
+            .filter(|session| session.origin == origin)
+            .count();
+        if hosted >= HOSTED {
+            return Err(Reason::TooMany);
         }
         let code = loop {
             let code = format!("{:06}", rand::rng().random_range(0..1_000_000));
@@ -110,6 +129,7 @@ impl Hub {
             }],
             state: None,
             emptied: None,
+            origin,
         };
         session.welcome(&code, &member);
         tracing::info!(provider = %session.provider, "session {code} created");
@@ -128,6 +148,7 @@ impl Hub {
         from: IpAddr,
         outbox: Outbox,
     ) -> Result<Place, Refusal> {
+        let from = address(from);
         let mut inner = self.lock();
         if inner
             .misses
@@ -251,6 +272,22 @@ impl Hub {
             "session {} lost a member to its host",
             place.code
         );
+    }
+
+    /// Lets one more connection in from `from`, unless that address holds `CONNECTIONS` open
+    /// already. The connection counts until the admission is dropped.
+    pub fn admit(self: &Arc<Self>, from: IpAddr) -> Option<Admission> {
+        let from = address(from);
+        let mut inner = self.lock();
+        let open = inner.connections.entry(from).or_default();
+        if *open >= CONNECTIONS {
+            return None;
+        }
+        *open += 1;
+        Some(Admission {
+            hub: self.clone(),
+            from,
+        })
     }
 
     /// Forgets sessions nobody came back to and misses old enough not to count.
@@ -387,4 +424,38 @@ fn local(track: &Value) -> bool {
         .get("id")
         .and_then(Value::as_str)
         .is_some_and(|id| id.starts_with(LOCAL_PREFIX))
+}
+
+/// One open connection, counted against its address until it is dropped.
+pub struct Admission {
+    hub: Arc<Hub>,
+    from: IpAddr,
+}
+
+impl Drop for Admission {
+    fn drop(&mut self) {
+        let mut inner = self.hub.lock();
+        if let Some(open) = inner.connections.get_mut(&self.from) {
+            *open = open.saturating_sub(1);
+            if *open == 0 {
+                inner.connections.remove(&self.from);
+            }
+        }
+    }
+}
+
+/// The address limits count against: an IPv4 address as it is, and an IPv6 one by its `/64`,
+/// since a single network hands out the rest of it freely.
+fn address(ip: IpAddr) -> IpAddr {
+    match ip {
+        IpAddr::V4(_) => ip,
+        IpAddr::V6(v6) => match v6.to_ipv4_mapped() {
+            Some(v4) => IpAddr::V4(v4),
+            None => {
+                let mut segments = v6.segments();
+                segments[4..].fill(0);
+                IpAddr::V6(std::net::Ipv6Addr::from(segments))
+            }
+        },
+    }
 }

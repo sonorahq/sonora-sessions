@@ -13,8 +13,8 @@ use std::time::Duration;
 use anyhow::{Context as _, Result};
 use axum::Router;
 use axum::extract::{ConnectInfo, State, WebSocketUpgrade};
-use axum::http::HeaderMap;
-use axum::response::Response;
+use axum::http::{HeaderMap, StatusCode};
+use axum::response::{IntoResponse as _, Response};
 use axum::routing::get;
 use tokio::net::TcpListener;
 use tracing_subscriber::EnvFilter;
@@ -79,9 +79,16 @@ async fn upgrade(
     headers: HeaderMap,
 ) -> Response {
     let from = client_ip(&headers).unwrap_or(peer.ip());
+    // one address holding too many sockets is turned away before it gets another
+    let Some(admission) = hub.admit(from) else {
+        return (StatusCode::TOO_MANY_REQUESTS, "too many connections").into_response();
+    };
     upgrade
         .max_message_size(MAX_MESSAGE)
-        .on_upgrade(move |socket| socket::serve(socket, hub, from))
+        .on_upgrade(move |socket| async move {
+            socket::serve(socket, hub, from).await;
+            drop(admission);
+        })
 }
 
 /// The address a request came from when a proxy stands in front: Cloudflare's header first, then
