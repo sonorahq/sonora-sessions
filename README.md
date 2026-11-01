@@ -11,10 +11,11 @@ docker run -d -p 8080:8080 --name sonora-sessions sonora-sessions
 
 Or without Docker: `cargo run --release`.
 
-| Variable   | Default                | Meaning            |
-| ---------- | ---------------------- | ------------------ |
-| `PORT`     | `8080`                 | Port to listen on  |
-| `RUST_LOG` | `sonora_sessions=info` | Log level          |
+| Variable          | Default                | Meaning                                                  |
+| ----------------- | ---------------------- | -------------------------------------------------------- |
+| `PORT`            | `8080`                 | Port to listen on                                        |
+| `RUST_LOG`        | `sonora_sessions=info` | Log level                                                |
+| `MAX_CONNECTIONS` | `100000` in the image  | People connected at once, about 9 KiB each while idle   |
 
 Put it behind a reverse proxy with TLS and WebSocket upgrades allowed.
 

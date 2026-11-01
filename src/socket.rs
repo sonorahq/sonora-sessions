@@ -13,7 +13,7 @@ use crate::hub::{self, Hub, Place};
 use crate::protocol::{Reason, Reply, Request, VERSION};
 
 /// How many replies wait for a client before newer ones are dropped.
-const BACKLOG: usize = 256;
+const BACKLOG: usize = 64;
 /// How long a client may stay silent before the server hangs up. Sonora pings well within it.
 const IDLE: Duration = Duration::from_secs(60);
 /// The longest display name kept, in characters.

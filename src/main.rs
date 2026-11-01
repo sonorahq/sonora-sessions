@@ -19,12 +19,23 @@ use axum::routing::get;
 use tokio::net::TcpListener;
 use tracing_subscriber::EnvFilter;
 
-use crate::hub::Hub;
+use crate::hub::{Hub, Turned};
 
 /// The port the server listens on when `PORT` names none.
 const PORT: u16 = 8080;
 /// The largest frame a client may send. A state with a full queue of tracks stays well under it.
-const MAX_MESSAGE: usize = 1 << 20;
+const MAX_MESSAGE: usize = 512 << 10;
+/// How much a connection reads from its socket at a time. Messages are small, and the default of
+/// 128 KiB held for every open connection was most of the memory the server used.
+const READ_BUFFER: usize = 4 << 10;
+/// How far writes to one slow connection may pile up before they fail. It has room for the
+/// largest message.
+const MAX_WRITE_BUFFER: usize = 1 << 20;
+/// How many connections the server holds at once when `MAX_CONNECTIONS` names no other number.
+/// An idle connection takes about 9 KiB, so this stays far inside a small container.
+const MAX_CONNECTIONS: usize = 20_000;
+/// Files the process keeps for itself beyond its connections: the listener, logs and the like.
+const SPARE_FILES: u64 = 64;
 /// How often sessions nobody came back to are closed.
 const SWEEP: Duration = Duration::from_secs(30);
 
@@ -44,7 +55,24 @@ async fn main() -> Result<()> {
         )
         .init();
 
-    let hub = Arc::new(Hub::default());
+    // every connection holds a file, and the soft limit a container starts with is far below
+    // what the hard limit allows
+    let files = match rlimit::increase_nofile_limit(u64::MAX) {
+        Ok(limit) => limit,
+        Err(error) => {
+            tracing::warn!("cannot raise the open files limit: {error}");
+            1024
+        }
+    };
+    let wanted = match std::env::var("MAX_CONNECTIONS") {
+        Ok(max) => max.parse().context("cannot read MAX_CONNECTIONS")?,
+        Err(_) => MAX_CONNECTIONS,
+    };
+    // a connection past the open files limit would fail anyway, so the server never takes it
+    let capacity = wanted.min(files.saturating_sub(SPARE_FILES) as usize);
+    tracing::info!("taking up to {capacity} connections, with {files} open files allowed");
+
+    let hub = Arc::new(Hub::new(capacity));
     let sweeper = hub.clone();
     tokio::spawn(async move {
         let mut every = tokio::time::interval(SWEEP);
@@ -80,11 +108,21 @@ async fn upgrade(
 ) -> Response {
     let from = client_ip(&headers).unwrap_or(peer.ip());
     // one address holding too many sockets is turned away before it gets another
-    let Some(admission) = hub.admit(from) else {
-        return (StatusCode::TOO_MANY_REQUESTS, "too many connections").into_response();
+    let admission = match hub.admit(from) {
+        Ok(admission) => admission,
+        Err(Turned::Full) => {
+            return (StatusCode::SERVICE_UNAVAILABLE, "the server is full").into_response();
+        }
+        Err(Turned::Address) => {
+            return (StatusCode::TOO_MANY_REQUESTS, "too many connections").into_response();
+        }
     };
     upgrade
         .max_message_size(MAX_MESSAGE)
+        .read_buffer_size(READ_BUFFER)
+        // every reply is flushed on its own, so nothing waits in a buffer to be batched
+        .write_buffer_size(0)
+        .max_write_buffer_size(MAX_WRITE_BUFFER)
         .on_upgrade(move |socket| async move {
             socket::serve(socket, hub, from).await;
             drop(admission);

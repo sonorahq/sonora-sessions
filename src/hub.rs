@@ -38,9 +38,11 @@ const CONNECTIONS: usize = 32;
 const LOCAL_PREFIX: &str = "local:";
 
 /// The sessions, behind one lock.
-#[derive(Default)]
 pub struct Hub {
     inner: Mutex<Inner>,
+    /// How many connections the whole server holds open at once. It is what bounds the memory
+    /// the server takes, since every connection keeps buffers and a queue of its own.
+    capacity: usize,
 }
 
 #[derive(Default)]
@@ -52,6 +54,8 @@ struct Inner {
     misses: HashMap<IpAddr, Misses>,
     /// Open connections per address.
     connections: HashMap<IpAddr, usize>,
+    /// Open connections in all.
+    open: usize,
 }
 
 struct Misses {
@@ -85,10 +89,26 @@ pub struct Place {
     pub member: String,
 }
 
+/// Why a connection was turned away before it opened.
+pub enum Turned {
+    /// The server holds as many connections as it takes.
+    Full,
+    /// The address holds as many as one address may.
+    Address,
+}
+
 /// Why a join failed, with the session's provider when the client lacks it.
 pub type Refusal = (Reason, Option<String>);
 
 impl Hub {
+    /// A hub that holds at most `capacity` connections open at once.
+    pub fn new(capacity: usize) -> Self {
+        Self {
+            inner: Mutex::default(),
+            capacity,
+        }
+    }
+
     /// Opens a session with the sender as its host and tells it the code.
     pub fn create(
         &self,
@@ -274,17 +294,21 @@ impl Hub {
         );
     }
 
-    /// Lets one more connection in from `from`, unless that address holds `CONNECTIONS` open
-    /// already. The connection counts until the admission is dropped.
-    pub fn admit(self: &Arc<Self>, from: IpAddr) -> Option<Admission> {
+    /// Lets one more connection in from `from`, unless the server is full or that address holds
+    /// `CONNECTIONS` open already. The connection counts until the admission is dropped.
+    pub fn admit(self: &Arc<Self>, from: IpAddr) -> Result<Admission, Turned> {
         let from = address(from);
         let mut inner = self.lock();
+        if inner.open >= self.capacity {
+            return Err(Turned::Full);
+        }
         let open = inner.connections.entry(from).or_default();
         if *open >= CONNECTIONS {
-            return None;
+            return Err(Turned::Address);
         }
         *open += 1;
-        Some(Admission {
+        inner.open += 1;
+        Ok(Admission {
             hub: self.clone(),
             from,
         })
@@ -435,6 +459,7 @@ pub struct Admission {
 impl Drop for Admission {
     fn drop(&mut self) {
         let mut inner = self.hub.lock();
+        inner.open = inner.open.saturating_sub(1);
         if let Some(open) = inner.connections.get_mut(&self.from) {
             *open = open.saturating_sub(1);
             if *open == 0 {
