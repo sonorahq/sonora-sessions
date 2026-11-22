@@ -220,8 +220,20 @@ impl Hub {
         if state.track.as_ref().is_some_and(local) {
             state.track = None;
         }
-        state.upcoming.retain(|track| !local(track));
-        state.upcoming.truncate(MAX_UPCOMING);
+        // the hand-queued marks follow their tracks as local files drop out
+        let (upcoming, queued): (Vec<_>, Vec<_>) = std::mem::take(&mut state.upcoming)
+            .into_iter()
+            .enumerate()
+            .filter(|(_, track)| !local(track))
+            .take(MAX_UPCOMING)
+            .map(|(index, track)| (track, state.queued.contains(&index)))
+            .unzip();
+        state.upcoming = upcoming;
+        state.queued = queued
+            .into_iter()
+            .enumerate()
+            .filter_map(|(index, queued)| queued.then_some(index))
+            .collect();
         state.at = now();
         session.state = Some(state.clone());
         session.broadcast(

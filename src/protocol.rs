@@ -124,6 +124,9 @@ pub struct Playback {
     /// What plays after it, in order.
     #[serde(default)]
     pub upcoming: Vec<Value>,
+    /// Which of `upcoming` were queued by hand, by index.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub queued: Vec<usize>,
     pub playing: bool,
     /// Where the track was, in milliseconds, at `at`.
     pub position: u64,
